@@ -690,10 +690,10 @@ contains
   character*19        :: date
   character*256       :: tile_filename
   integer             :: itile
-  integer             :: ncid, varid, status, i
+  integer             :: ncid, varid, status, i, nvars
   integer             :: dim_id_xdim, dim_id_ydim, dim_id_soil, dim_id_snow, dim_id_snso, dim_id_time
   double precision    :: swe_snd_land(namelist%tile_size, namelist%tile_size)   ! swe/snd over land
-
+  integer,allocatable :: varids(:)
   logical             :: file_exists
 
   do itile = 1, 6
@@ -714,10 +714,25 @@ contains
     end if
     status = nf90_open(tile_filename, NF90_WRITE, ncid)
     if (status /= nf90_noerr) call handle_err(status)
-    
+
+    ! reapply Fletcher32 checksum
+    status = nf90_inquire(ncid, nVariables = nvars)
+    if (status /= nf90_noerr) call handle_err(status)
+    allocate(varids(nvars))
+    print*, "redefining checksum"
+    status = nf90_redef(ncid) 
+    if (status /= nf90_noerr) call handle_err(status)
+    do i = 1, nvars
+        print*, "var = ", i
+        status = nf90_def_var_fletcher32(ncid, varids(i), nf90_fletcher32_enabled)
+        if (status /= nf90_noerr) call handle_err(status)
+    end do
+    status = nf90_enddef(ncid)
+    if (status /= nf90_noerr) call handle_err(status)
+    print*, "finished redef"
    else   ! create new file (default) 
     
-    print*, "Writing tile file: ", trim(tile_filename)
+    print*, "Creating tile file: ", trim(tile_filename)
 
     status = nf90_create(tile_filename, NF90_CLOBBER, ncid)
       if (status /= nf90_noerr) call handle_err(status)
@@ -985,7 +1000,7 @@ contains
   subroutine handle_err(status)
     use netcdf
     integer, intent ( in) :: status
- 
+    
     if(status /= nf90_noerr) then
       print *, trim(nf90_strerror(status))
       stop 10
