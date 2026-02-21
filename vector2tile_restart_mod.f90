@@ -952,16 +952,14 @@ contains
   type(namelist_type) :: namelist
   type(tile_type)     :: tile
   character*19        :: date
-  character*256       :: tile_filename_in, tile_filename_out
+  character*256       :: tile_filename, tile_filename_in, tile_filename_out
   integer             :: itile
-  integer             :: ncid_in, ncid_out, varid, status, i, nvars, ndims, ngatts
+  integer             :: ncid_in, ncid_out, varid, dimid, status, i, nvars, ndims, ngatts
   integer             :: varid_in, varid_out
   integer             :: dimids(NF90_MAX_DIMS), varids(NF90_MAX_DIMS)
   character(len=NF90_MAX_NAME) :: varname, dimname
-  integer                      :: xtype, natts, dimlen
-  
-  integer                      :: natts, i, attlen
-  character(len=NF90_MAX_NAME) :: attname
+  integer                      :: xtype, natts, dimlen, attlen, j
+  character(len=NF90_MAX_NAME)  :: attname
   character(len=:), allocatable :: attval
   
   integer             :: dim_id_xdim, dim_id_ydim, dim_id_soil, dim_id_snow, dim_id_snso, dim_id_time
@@ -997,6 +995,8 @@ contains
     if (status /= nf90_noerr) call handle_err(status)
 
     ! Copy dimensions
+    !status = nf90_inq_dimids(ncid_in, nvars, dimids(1:ndims))
+    !if (status /= nf90_noerr) call handle_err(status)
     do i = 1, ndims
       status = nf90_inquire_dimension(ncid_in, i, dimname, dimlen)
       if (status /= nf90_noerr) call handle_err(status)
@@ -1008,27 +1008,7 @@ contains
       if (status /= nf90_noerr) call handle_err(status)
     end do
     
-    ! Define variables to copy
-    status = nf90_inq_varids(ncid_in, nvars, varids(1:nvars))
-    if (status /= nf90_noerr) call handle_err(status)
-    do i = 1, nvars
-      status = nf90_inquire_variable(ncid_in, varids(i), varname, xtype, ndims, dimids, natts)
-      if (status /= nf90_noerr) call handle_err(status)
-      status = nf90_def_var(ncid_out, trim(varname), xtype, dimids(1:ndims), varid_out)
-      if (status /= nf90_noerr) call handle_err(status)
-      ! Copy variable attributes
-      ! call copy_attributes(ncid_in, ncid_out, varids(i), varid_out)
-      status = nf90_inquire_variable(ncid_in, varid_in, nAtts=natts)
-      if (status /= nf90_noerr) call handle_err(status)
-      do i = 1, natts
-        status = nf90_inq_attname(ncid_in, varid_in, i, attname)
-        status = nf90_copy_att(ncid_in, varid_in, trim(attname), ncid_out, varid_out)
-      end do
-      status = nf90_def_var_fletcher32(ncid, varids(i), nf90_fletcher32)
-      if (status /= nf90_noerr) call handle_err(status)
-    end do    
-    
-    ! Copy variable attributes
+    ! Define variables
     do i = 1, nvars
       status = nf90_inquire_variable(ncid_in, varids(i), varname, xtype, ndims, dimids, natts)
       if (status /= nf90_noerr) call handle_err(status)
@@ -1041,8 +1021,8 @@ contains
       ! call copy_attributes(ncid_in, ncid_out, varids(i), varid_out)
       status = nf90_inquire_variable(ncid_in, varids(i), nAtts=natts)
       if (status /= nf90_noerr) call handle_err(status)
-      do i = 1, natts
-        status = nf90_inq_attname(ncid_in, varids(i), i, attname)
+      do j = 1, natts
+        status = nf90_inq_attname(ncid_in, varids(i), j, attname)
         if (trim(attname) /= "checksum") then
           status = nf90_copy_att(ncid_in, varids(i), trim(attname), ncid_out, varid_out)
           if (status /= nf90_noerr) call handle_err(status)
