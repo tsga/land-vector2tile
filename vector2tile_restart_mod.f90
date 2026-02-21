@@ -974,7 +974,7 @@ contains
     write(tile_filename,'(a4,a2,a2,a1,a2,a18,i1,a3)')  & 
         date(1:4), date(6:7), date(9:10),".",date(12:13), "0000.sfc_data.tile",itile,".nc"
 
-    tile_filename_in = trim(namelist%tile_path)//trim(tile_filename)
+    tile_filename_in = trim(namelist%tile_restart_path)//trim(tile_filename)
     tile_filename_out = trim(namelist%output_path)//trim(tile_filename)
     
     inquire(file=tile_filename_in, exist=file_exists)
@@ -1028,6 +1028,22 @@ contains
           if (status /= nf90_noerr) call handle_err(status)
         endif
       end do
+      
+      ! copy data
+      !call copy_var_double(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims))
+      !call copy_var_generic(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims), xtype)
+      select case(xtype)
+        case(NF90_DOUBLE)
+          call copy_var_double(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims))
+        case(NF90_FLOAT)
+          call copy_var_float(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims))
+        case(NF90_INT)
+          call copy_var_int(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims))
+        case default
+          print*, "Error: unsupported data type ", xtype 
+          stop 10
+      end select
+
     end do 
     
     ! Copy global attributes
@@ -1132,12 +1148,179 @@ contains
       start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
 
     ! close out file
-    status = nf90_close(ncid_out)
+    status = nf90_close(ncid)
     if (status /= nf90_noerr) call handle_err(status)
    
   end do
   
   end subroutine WriteTileRestart_update_existing
+
+
+!  subroutine copy_var_generic(ncid_in, ncid_out, varid_in, varid_out, ndims, dimids, xtype)
+!    use netcdf
+!    implicit none
+!    integer :: ncid_in, ncid_out, varid_in, varid_out, ndims, xtype
+!    integer :: dimids(ndims), status
+!    class(*), allocatable :: data_arr(:)  ! Polymorphic type
+!    integer :: dimlens(ndims), i
+!    !integer :: dimstrt(ndims)
+!
+!    !dimstrt = 1
+!    ! Allocate based on dimension sizes
+!    do i = 1, ndims
+!      status = nf90_inquire_dimension(ncid_in, dimids(i), len=dimlens(i))
+!      if (status /= nf90_noerr) call handle_err(status)
+!    end do
+!
+!    ! Allocate based on type
+!    select case(xtype)
+!      case(NF90_DOUBLE)
+!        allocate(real(kind=8) :: data_arr(product(dimlens)))
+!      case(NF90_FLOAT)
+!        allocate(real(kind=4) :: data_arr(product(dimlens)))
+!      case(NF90_INT)
+!        allocate(integer :: data_arr(product(dimlens)))
+!    end select
+!
+!    ! Get variable ID in output file
+!    !status = nf90_inq_varid(ncid_in, trim(varname), varid_in)
+!    status = nf90_get_var(ncid_in, varid_in , data_arr) ! ,start = dimstrt, count = dimlens)
+!
+!    ! Write data
+!    status = nf90_put_var(ncid_out, varid_out, data_arr)
+!    if (status /= nf90_noerr) call handle_err(status)
+!
+!    deallocate(data_arr)
+!
+!  end subroutine copy_var_generic
+  
+
+  subroutine copy_var_double(ncid_in, ncid_out, varid_in, varid_out, ndims, dimids)
+    use netcdf
+    implicit none
+    integer :: ncid_in, ncid_out, varid_in, varid_out, ndims,  i
+    integer :: dimids(ndims), status
+    double precision, allocatable :: data_arr(:,:,:,:)
+    integer :: dimlens(ndims)
+    !integer :: dimstrt(ndims)
+
+    !dimstrt = 1
+    ! Allocate based on dimension sizes
+    do i = 1, ndims
+      status = nf90_inquire_dimension(ncid_in, dimids(i), len=dimlens(i))
+      if (status /= nf90_noerr) call handle_err(status)
+    end do
+
+    select case(ndims)
+      case(1)
+        allocate(data_arr(dimlens(1),1,1,1))
+      case(2)
+        allocate(data_arr(dimlens(1),dimlens(2),1,1))
+      case(3)
+        allocate(data_arr(dimlens(1),dimlens(2),dimlens(3),1))
+      case(4)
+        allocate(data_arr(dimlens(1),dimlens(2),dimlens(3),dimlens(4)))
+      case default
+        print*, "Error: unsupported ndims = ", ndims
+        stop 10
+    end select
+
+    ! Get variable ID in output file
+    !status = nf90_inq_varid(ncid_in, trim(varname), varid_in)
+    status = nf90_get_var(ncid_in, varid_in , data_arr) ! ,start = dimstrt, count = dimlens)
+
+    ! Write data
+    status = nf90_put_var(ncid_out, varid_out, data_arr)
+    if (status /= nf90_noerr) call handle_err(status)
+
+    deallocate(data_arr)
+
+  end subroutine copy_var_double
+
+ subroutine copy_var_float(ncid_in, ncid_out, varid_in, varid_out, ndims, dimids)
+    use netcdf
+    implicit none
+    integer :: ncid_in, ncid_out, varid_in, varid_out, ndims,  i
+    integer :: dimids(ndims), status
+    real(kind=4), allocatable :: data_arr(:,:,:,:)
+    integer :: dimlens(ndims)
+    !integer :: dimstrt(ndims)
+
+    !dimstrt = 1
+    ! Allocate based on dimension sizes
+    do i = 1, ndims
+      status = nf90_inquire_dimension(ncid_in, dimids(i), len=dimlens(i))
+      if (status /= nf90_noerr) call handle_err(status)
+    end do
+
+    select case(ndims)
+      case(1)
+        allocate(data_arr(dimlens(1),1,1,1))
+      case(2)
+        allocate(data_arr(dimlens(1),dimlens(2),1,1))
+      case(3)
+        allocate(data_arr(dimlens(1),dimlens(2),dimlens(3),1))
+      case(4)
+        allocate(data_arr(dimlens(1),dimlens(2),dimlens(3),dimlens(4)))
+      case default
+        print*, "Error: unsupported ndims = ", ndims
+        stop 10
+    end select
+
+    ! Get variable ID in output file
+    !status = nf90_inq_varid(ncid_in, trim(varname), varid_in)
+    status = nf90_get_var(ncid_in, varid_in , data_arr) ! ,start = dimstrt, count = dimlens)
+
+    ! Write data
+    status = nf90_put_var(ncid_out, varid_out, data_arr)
+    if (status /= nf90_noerr) call handle_err(status)
+
+    deallocate(data_arr)
+
+  end subroutine copy_var_float
+
+  subroutine copy_var_int(ncid_in, ncid_out, varid_in, varid_out, ndims, dimids)
+    use netcdf
+    implicit none
+    integer :: ncid_in, ncid_out, varid_in, varid_out, ndims,  i
+    integer :: dimids(ndims), status
+    integer, allocatable :: data_arr(:,:,:,:)
+    integer :: dimlens(ndims)
+    !integer :: dimstrt(ndims)
+
+    !dimstrt = 1
+    ! Allocate based on dimension sizes
+    do i = 1, ndims
+      status = nf90_inquire_dimension(ncid_in, dimids(i), len=dimlens(i))
+      if (status /= nf90_noerr) call handle_err(status)
+    end do
+
+    select case(ndims)
+      case(1)
+        allocate(data_arr(dimlens(1),1,1,1))
+      case(2)
+        allocate(data_arr(dimlens(1),dimlens(2),1,1))
+      case(3)
+        allocate(data_arr(dimlens(1),dimlens(2),dimlens(3),1))
+      case(4)
+        allocate(data_arr(dimlens(1),dimlens(2),dimlens(3),dimlens(4)))
+      case default
+        print*, "Error: unsupported ndims = ", ndims
+        stop 10
+    end select
+
+    ! Get variable ID in output file
+    !status = nf90_inq_varid(ncid_in, trim(varname), varid_in)
+    status = nf90_get_var(ncid_in, varid_in , data_arr) ! ,start = dimstrt, count = dimlens)
+
+    ! Write data
+    status = nf90_put_var(ncid_out, varid_out, data_arr)
+    if (status /= nf90_noerr) call handle_err(status)
+
+    deallocate(data_arr)
+
+  end subroutine copy_var_int
+
 
   subroutine copy_all_variables(ncid_in, ncid_out, nvars)
   
@@ -1154,7 +1337,7 @@ contains
     if (status /= nf90_noerr) call handle_err(status)
     
     ! Use nf90_copy_var to copy all data at once
-    status = nf90_copy_var(ncid_in, i, ncid_out)
+    !---doesn't exist status = nf90_copy_var(ncid_in, i, ncid_out)
     if (status /= nf90_noerr) call handle_err(status)
   end do
   
