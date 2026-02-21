@@ -724,7 +724,7 @@ contains
     if (status /= nf90_noerr) call handle_err(status)
     do i = 1, nvars
         print*, "var = ", i
-        status = nf90_def_var_fletcher32(ncid, varids(i), nf90_fletcher32_enabled)
+        status = nf90_def_var_fletcher32(ncid, varids(i), nf90_fletcher32)
         if (status /= nf90_noerr) call handle_err(status)
     end do
     status = nf90_enddef(ncid)
