@@ -189,7 +189,11 @@ contains
 ! Write FV3 tile file
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-    call WriteTileRestart(namelist, date, tile)
+    if (namelist%update_existing_tiles) then
+        call WriteTileRestart_update_existing(namelist, date, tile)
+    else
+        call WriteTileRestart(namelist, date, tile)
+    endif
   
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 ! tile2vector branch
@@ -690,11 +694,9 @@ contains
   character*19        :: date
   character*256       :: tile_filename
   integer             :: itile
-  integer             :: ncid, varid, status, i, nvars
+  integer             :: ncid, varid, status, i
   integer             :: dim_id_xdim, dim_id_ydim, dim_id_soil, dim_id_snow, dim_id_snso, dim_id_time
   double precision    :: swe_snd_land(namelist%tile_size, namelist%tile_size)   ! swe/snd over land
-  integer,allocatable :: varids(:)
-  logical             :: file_exists
 
   do itile = 1, 6
 
@@ -703,36 +705,8 @@ contains
         date(1:4), date(6:7), date(9:10),".",date(12:13), "0000.sfc_data.tile",itile,".nc"
 
     tile_filename = trim(namelist%output_path)//trim(tile_filename)
-
-   if (namelist%update_existing_tiles) then
-   
-    inquire(file=tile_filename, exist=file_exists)
-    if(.not.file_exists) then 
-      print*, trim(tile_filename), " does not exist"
-      print*, "Check namelist setting (update existing file) and paths and file name "
-      stop 10
-    end if
-    status = nf90_open(tile_filename, NF90_WRITE, ncid)
-    if (status /= nf90_noerr) call handle_err(status)
-
-    ! reapply Fletcher32 checksum
-    status = nf90_inquire(ncid, nVariables = nvars)
-    if (status /= nf90_noerr) call handle_err(status)
-    allocate(varids(nvars))
-    print*, "redefining checksum"
-    status = nf90_redef(ncid) 
-    if (status /= nf90_noerr) call handle_err(status)
-    do i = 1, nvars
-        print*, "var = ", i
-        status = nf90_def_var_fletcher32(ncid, varids(i), nf90_fletcher32)
-        if (status /= nf90_noerr) call handle_err(status)
-    end do
-    status = nf90_enddef(ncid)
-    if (status /= nf90_noerr) call handle_err(status)
-    print*, "finished redef"
-   else   ! create new file (default) 
     
-    print*, "Creating tile file: ", trim(tile_filename)
+    print*, "Writing tile file: ", trim(tile_filename)
 
     status = nf90_create(tile_filename, NF90_CLOBBER, ncid)
       if (status /= nf90_noerr) call handle_err(status)
@@ -777,6 +751,7 @@ contains
     status = nf90_def_var(ncid, "zaxis_4", NF90_DOUBLE,    &
       (/dim_id_snso/), varid)
     if (status /= nf90_noerr) call handle_err(status)
+
   
 ! Define variables in the file.
 
@@ -852,6 +827,7 @@ contains
 
     status = nf90_enddef(ncid)
 
+
 ! fill dimension variables 
 
     status = nf90_inq_varid(ncid, "Time", varid)
@@ -877,9 +853,7 @@ contains
     status = nf90_inq_varid(ncid, "zaxis_4", varid)
     if (status /= nf90_noerr) call handle_err(status)
     status = nf90_put_var(ncid, varid ,(/(i, i=1, 7)/) )
-    
-   endif ! create new file
-   
+
 ! Start writing restart file
     
     ! snow_depth/swe variables from the vector restart are grid cell averages
@@ -964,14 +938,282 @@ contains
     status = nf90_inq_varid(ncid, "tgxy", varid)
     status = nf90_put_var(ncid, varid , tile%temperature_ground(:,:,itile)   , &
       start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
-   
-    status = nf90_close(ncid)
+      
+  status = nf90_close(ncid)
+
+  end do
+  
+  end subroutine WriteTileRestart
+
+  subroutine WriteTileRestart_update_existing(namelist, date, tile)
+  
+  use netcdf
+
+  type(namelist_type) :: namelist
+  type(tile_type)     :: tile
+  character*19        :: date
+  character*256       :: tile_filename_in, tile_filename_out
+  integer             :: itile
+  integer             :: ncid_in, ncid_out, varid, status, i, nvars, ndims, ngatts
+  integer             :: varid_in, varid_out
+  integer             :: dimids(NF90_MAX_DIMS), varids(NF90_MAX_DIMS)
+  character(len=NF90_MAX_NAME) :: varname, dimname
+  integer                      :: xtype, natts, dimlen
+  
+  integer                      :: natts, i, attlen
+  character(len=NF90_MAX_NAME) :: attname
+  character(len=:), allocatable :: attval
+  
+  integer             :: dim_id_xdim, dim_id_ydim, dim_id_soil, dim_id_snow, dim_id_snso, dim_id_time
+  double precision    :: swe_snd_land(namelist%tile_size, namelist%tile_size)   ! swe/snd over land
+
+  logical             :: file_exists
+
+
+  do itile = 1, 6
+
+    !write(tile_filename,'(a17,a19,a5,i1,a3)') "ufs_land_restart.", date, ".tile", itile, ".nc"
+    write(tile_filename,'(a4,a2,a2,a1,a2,a18,i1,a3)')  & 
+        date(1:4), date(6:7), date(9:10),".",date(12:13), "0000.sfc_data.tile",itile,".nc"
+
+    tile_filename_in = trim(namelist%tile_path)//trim(tile_filename)
+    tile_filename_out = trim(namelist%output_path)//trim(tile_filename)
+    
+    inquire(file=tile_filename_in, exist=file_exists)
+    if(.not.file_exists) then 
+      print*, trim(tile_filename_in), " does not exist"
+      print*, "Check namelist setting (update existing file) and paths and file name "
+      stop 10
+    end if
+    status = nf90_open(tile_filename_in, NF90_WRITE, ncid_in)
+    if (status /= nf90_noerr) call handle_err(status)
+
+    ! Create output file
+    status = nf90_create(tile_filename_out, NF90_CLOBBER, ncid_out)
+    if (status /= nf90_noerr) call handle_err(status)
+  
+    ! Get file info
+    status = nf90_inquire(ncid_in, nDimensions=ndims, nVariables=nvars, nAttributes=ngatts)
+    if (status /= nf90_noerr) call handle_err(status)
+
+    ! Copy dimensions
+    do i = 1, ndims
+      status = nf90_inquire_dimension(ncid_in, i, dimname, dimlen)
+      if (status /= nf90_noerr) call handle_err(status)
+      if (dimlen == NF90_UNLIMITED) then
+        status = nf90_def_dim(ncid_out, trim(dimname), NF90_UNLIMITED, i)
+      else
+        status = nf90_def_dim(ncid_out, trim(dimname), dimlen, i)
+      end if
+      if (status /= nf90_noerr) call handle_err(status)
+    end do
+    
+    ! Define variables to copy
+    status = nf90_inq_varids(ncid_in, nvars, varids(1:nvars))
+    if (status /= nf90_noerr) call handle_err(status)
+    do i = 1, nvars
+      status = nf90_inquire_variable(ncid_in, varids(i), varname, xtype, ndims, dimids, natts)
+      if (status /= nf90_noerr) call handle_err(status)
+      status = nf90_def_var(ncid_out, trim(varname), xtype, dimids(1:ndims), varid_out)
+      if (status /= nf90_noerr) call handle_err(status)
+      ! Copy variable attributes
+      ! call copy_attributes(ncid_in, ncid_out, varids(i), varid_out)
+      status = nf90_inquire_variable(ncid_in, varid_in, nAtts=natts)
+      if (status /= nf90_noerr) call handle_err(status)
+      do i = 1, natts
+        status = nf90_inq_attname(ncid_in, varid_in, i, attname)
+        status = nf90_copy_att(ncid_in, varid_in, trim(attname), ncid_out, varid_out)
+      end do
+      status = nf90_def_var_fletcher32(ncid, varids(i), nf90_fletcher32)
+      if (status /= nf90_noerr) call handle_err(status)
+    end do    
+    
+    ! Copy variable attributes
+    do i = 1, nvars
+      status = nf90_inquire_variable(ncid_in, varids(i), varname, xtype, ndims, dimids, natts)
+      if (status /= nf90_noerr) call handle_err(status)
+      status = nf90_def_var(ncid_out, trim(varname), xtype, dimids(1:ndims), varid_out)
+      if (status /= nf90_noerr) call handle_err(status)
+      
+      status = nf90_def_var_fletcher32(ncid, varid_out, nf90_fletcher32)
+      if (status /= nf90_noerr) call handle_err(status)
+      
+      ! call copy_attributes(ncid_in, ncid_out, varids(i), varid_out)
+      status = nf90_inquire_variable(ncid_in, varids(i), nAtts=natts)
+      if (status /= nf90_noerr) call handle_err(status)
+      do i = 1, natts
+        status = nf90_inq_attname(ncid_in, varids(i), i, attname)
+        if (trim(attname) /= "checksum") then
+          status = nf90_copy_att(ncid_in, varids(i), trim(attname), ncid_out, varid_out)
+          if (status /= nf90_noerr) call handle_err(status)
+        endif
+      end do
+    end do 
+    
+    ! Copy global attributes
+    do i = 1, ngatts
+      call copy_global_attribute(ncid_in, ncid_out, i)
+    end do
+
+    ! End definition mode
+    status = nf90_enddef(ncid_out)
+    if (status /= nf90_noerr) call handle_err(status)
+
+    ! Copy variable data
+    call copy_all_variables(ncid_in, ncid_out, nvars)
+    
+    ! Close input file
+    status = nf90_close(ncid_in)
+    if (status /= nf90_noerr) call handle_err(status)
+
+! Start writing restart file
+    
+    ! snow_depth/swe variables from the vector restart are grid cell averages
+    ! scaled by land_frac to get weasdl and snodl
+    
+    status = nf90_inq_varid(ncid, "sheleg", varid)
+    status = nf90_put_var(ncid, varid , tile%swe(:,:,itile)   , &
+      start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
+    
+    swe_snd_land = 0.   !tile%swe(:,:,itile)
+    where(tile%land_frac(:,:,itile) > 0.) swe_snd_land = tile%swe(:,:,itile)/tile%land_frac(:,:,itile)
+    status = nf90_inq_varid(ncid, "weasdl", varid)
+    status = nf90_put_var(ncid, varid , swe_snd_land(:,:)   , &                 !weasdl = swe_grid/land_frac
+      start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
+    
+    status = nf90_inq_varid(ncid, "snwdph", varid)
+    status = nf90_put_var(ncid, varid , tile%snow_depth(:,:,itile)   , &
+      start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
+  
+    swe_snd_land = 0.  
+    where(tile%land_frac(:,:,itile) > 0.) swe_snd_land = tile%snow_depth(:,:,itile)/tile%land_frac(:,:,itile)
+    status = nf90_inq_varid(ncid, "snodl", varid)
+    status = nf90_put_var(ncid, varid , swe_snd_land(:,:)   , &
+      start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
+
+    status = nf90_inq_varid(ncid, "snowxy", varid)
+    status = nf90_put_var(ncid, varid , tile%active_snow_layers(:,:,itile)   , &
+      start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
+
+    status = nf90_inq_varid(ncid, "sneqvoxy", varid)
+    status = nf90_put_var(ncid, varid , tile%swe_previous(:,:,itile)   , &
+      start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
+
+    status = nf90_inq_varid(ncid, "zsnsoxy", varid)
+    status = nf90_put_var(ncid, varid , tile%snow_soil_interface(:,:,:,itile) , &
+      start = (/1                , 1                , 1, 1/), &
+      count = (/namelist%tile_size, namelist%tile_size, 7, 1/))
+
+    status = nf90_inq_varid(ncid, "tsnoxy", varid)
+    status = nf90_put_var(ncid, varid , tile%temperature_snow(:,:,:,itile)  , &
+      start = (/1                , 1                , 1, 1/), &
+      count = (/namelist%tile_size, namelist%tile_size, 3, 1/))
+
+    status = nf90_inq_varid(ncid, "snicexy", varid)
+    status = nf90_put_var(ncid, varid , tile%snow_ice_layer(:,:,:,itile) , &
+      start = (/1                , 1                , 1, 1/), &
+      count = (/namelist%tile_size, namelist%tile_size, 3, 1/))
+
+    status = nf90_inq_varid(ncid, "snliqxy", varid)
+    status = nf90_put_var(ncid, varid , tile%snow_liq_layer(:,:,:,itile) , &
+      start = (/1                , 1                , 1, 1/), &
+      count = (/namelist%tile_size, namelist%tile_size, 3, 1/))
+
+    status = nf90_inq_varid(ncid, "stc", varid)
+    status = nf90_put_var(ncid, varid , tile%temperature_soil(:,:,:,itile)   , &
+      start = (/1,1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 4, 1/))
+
+    status = nf90_inq_varid(ncid, "smc", varid)
+    status = nf90_put_var(ncid, varid , tile%soil_moisture_total(:,:,:,itile)   , &
+      start = (/1,1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 4, 1/)) 
+
+! include in output, so can be used to id which tile grid cells are being simulated
+    status = nf90_inq_varid(ncid, "slmsk", varid)
+    status = nf90_put_var(ncid, varid , tile%slmsk(:,:,itile)   , &
+      start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
+
+    status = nf90_inq_varid(ncid, "vtype", varid)
+    status = nf90_put_var(ncid, varid , tile%vegetation_type(:,:,itile)   , &
+      start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
+
+    ! fraction of ice --all zero over land
+    status = nf90_inq_varid(ncid, "fice", varid)
+    status = nf90_put_var(ncid, varid , tile%ice_frac(:,:,itile)   , &
+      start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
+
+! include for JEDI QC of SMAP obs
+    status = nf90_inq_varid(ncid, "slc", varid)
+    status = nf90_put_var(ncid, varid , tile%soil_moisture_liquid(:,:,:,itile)   , &
+      start = (/1                , 1                , 1, 1/), &
+      count = (/namelist%tile_size, namelist%tile_size, 4, 1/))
+
+    status = nf90_inq_varid(ncid, "tgxy", varid)
+    status = nf90_put_var(ncid, varid , tile%temperature_ground(:,:,itile)   , &
+      start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
+
+    ! close out file
+    status = nf90_close(ncid_out)
     if (status /= nf90_noerr) call handle_err(status)
    
   end do
   
-  end subroutine WriteTileRestart
+  end subroutine WriteTileRestart_update_existing
+
+  subroutine copy_all_variables(ncid_in, ncid_out, nvars)
   
+  use netcdf
+  implicit none
+  
+  integer           :: ncid_in, ncid_out, nvars
+  integer           :: i, status, xtype, ndims
+  integer           :: dimids(NF90_MAX_DIMS)
+  character(len=NF90_MAX_NAME) :: varname
+  
+  do i = 1, nvars
+    status = nf90_inquire_variable(ncid_in, i, varname, xtype, ndims, dimids)
+    if (status /= nf90_noerr) call handle_err(status)
+    
+    ! Use nf90_copy_var to copy all data at once
+    status = nf90_copy_var(ncid_in, i, ncid_out)
+    if (status /= nf90_noerr) call handle_err(status)
+  end do
+  
+end subroutine copy_all_variables
+
+subroutine copy_attributes(ncid_in, ncid_out, varid_in, varid_out)
+  
+  use netcdf
+  implicit none
+  
+  integer           :: ncid_in, ncid_out, varid_in, varid_out
+  integer           :: natts, i, status, xtype, attlen
+  character(len=NF90_MAX_NAME) :: attname
+  character(len=:), allocatable :: attval
+  
+  status = nf90_inquire_variable(ncid_in, varid_in, nAtts=natts)
+  
+  do i = 1, natts
+    status = nf90_inq_attname(ncid_in, varid_in, i, attname)
+    status = nf90_copy_att(ncid_in, varid_in, trim(attname), ncid_out, varid_out)
+  end do
+  
+end subroutine copy_attributes
+
+subroutine copy_global_attribute(ncid_in, ncid_out, attnum)
+  
+  use netcdf
+  implicit none
+  
+  integer           :: ncid_in, ncid_out, attnum
+  integer           :: status
+  character(len=NF90_MAX_NAME) :: attname
+  
+  status = nf90_inq_attname(ncid_in, NF90_GLOBAL, attnum, attname)
+  status = nf90_copy_att(ncid_in, NF90_GLOBAL, trim(attname), &
+                          ncid_out, NF90_GLOBAL)
+  
+end subroutine copy_global_attribute
+
   subroutine ReadVectorLength(filename, vector_length)
   
   use netcdf
