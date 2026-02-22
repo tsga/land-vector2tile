@@ -2,7 +2,19 @@ module vector2tile_restart_mod
 
   use namelist_mod
   use netcdf
+
+  use iso_c_binding
   implicit none
+  interface
+    subroutine MD5(data, len, digest) bind(C, name="MD5")
+      use iso_c_binding
+      type(c_ptr), value :: data
+      integer(c_size_t), value :: len
+      character(c_char), intent(out) :: digest(16)  ! 128-bit = 16 bytes
+    end subroutine MD5
+  end interface
+
+  !implicit none
 
   type vector_type
     double precision, allocatable :: swe                (:)
@@ -966,6 +978,27 @@ contains
   double precision    :: swe_snd_land(namelist%tile_size, namelist%tile_size)   ! swe/snd over land
 
   logical             :: file_exists
+  
+  character(len=32) :: checksum_hex
+  character(len=16) :: digest
+  real(kind=4), pointer :: array_data(:)
+
+  print*, "start"
+  allocate(array_data(2))
+  print*, "alloc"
+  array_data=(/1., 2./)
+
+  print*, "copy"
+      ! Call MD5
+    call MD5(c_loc(array_data), int(size(array_data)*4, c_size_t), digest)
+  print*, "md5"
+
+      ! Convert bytes to hex string
+      do i = 1, 16
+        write(checksum_hex(2*i-1:2*i), '(Z2.2)') ichar(digest(i:i))
+      end do
+   print*,"checkex"
+      print*, "calculated checksum ", checksum_hex
 
 
   do itile = 1, 6
@@ -987,7 +1020,7 @@ contains
     if (status /= nf90_noerr) call handle_err(status)
 
     ! Create output file
-    status = nf90_create(tile_filename_out, NF90_CLOBBER, ncid)
+    status = nf90_create(tile_filename_out, IOR(NF90_NETCDF4, NF90_CLOBBER), ncid)
     if (status /= nf90_noerr) call handle_err(status)
   
     ! Get file info
@@ -1009,18 +1042,15 @@ contains
     end do
     
     ! Define variables
+    status = nf90_inq_varids(ncid_in, nvars, varids)
+    if (status /= nf90_noerr) call handle_err(status)
     do i = 1, nvars
       status = nf90_inquire_variable(ncid_in, varids(i), varname, xtype, ndims, dimids, natts)
       if (status /= nf90_noerr) call handle_err(status)
       status = nf90_def_var(ncid, trim(varname), xtype, dimids(1:ndims), varid_out)
       if (status /= nf90_noerr) call handle_err(status)
       
-      status = nf90_def_var_fletcher32(ncid, varid_out, nf90_fletcher32)
-      if (status /= nf90_noerr) call handle_err(status)
-      
       ! call copy_attributes(ncid_in, ncid, varids(i), varid_out)
-      status = nf90_inquire_variable(ncid_in, varids(i), nAtts=natts)
-      if (status /= nf90_noerr) call handle_err(status)
       do j = 1, natts
         status = nf90_inq_attname(ncid_in, varids(i), j, attname)
         if (trim(attname) /= "checksum") then
@@ -1028,24 +1058,28 @@ contains
           if (status /= nf90_noerr) call handle_err(status)
         endif
       end do
-      
-      ! copy data
-      !call copy_var_double(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims))
-      !call copy_var_generic(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims), xtype)
-      select case(xtype)
-        case(NF90_DOUBLE)
-          call copy_var_double(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims))
-        case(NF90_FLOAT)
-          call copy_var_float(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims))
-        case(NF90_INT)
-          call copy_var_int(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims))
-        case default
-          print*, "Error: unsupported data type ", xtype 
-          stop 10
-      end select
+ 
+      !status = nf90_def_var_fletcher32(ncid, varid_out, fletcher32 = nf90_fletcher32)
+      !if (status /= nf90_noerr) call handle_err(status)
+
+      !status = nf90_def_var_chunking(ncid, varid_out, NF90_CHUNKED, (/0, 0/))
+      !if (status /= nf90_noerr) call handle_err(status)
+
+      status = nf90_put_att(ncid, varid_out, "checksum", digest) !:#checksum_hex)
+      if (status /= nf90_noerr) call handle_err(status)
+
+
+      ! Call MD5
+!      call MD5(c_loc(tile%swe(:,:,3)), int(size(tile%swe(:,:,3))*4, c_size_t), digest)
+!      
+!      ! Convert bytes to hex string
+!      do i = 1, 16
+!        write(field_checksum_hex(2*i-1:2*i), '(Z2.2)') ichar(digest(i:i))
+!      end do
 
     end do 
-    
+
+
     ! Copy global attributes
     do i = 1, ngatts
       call copy_global_attribute(ncid_in, ncid, i)
@@ -1056,14 +1090,26 @@ contains
     if (status /= nf90_noerr) call handle_err(status)
 
     ! Copy variable data
-    call copy_all_variables(ncid_in, ncid, nvars)
-    
-    ! Close input file
-    status = nf90_close(ncid_in)
-    if (status /= nf90_noerr) call handle_err(status)
+    !call copy_all_variables(ncid_in, ncid, nvars)
+    do i = 1, nvars
+      status = nf90_inquire_variable(ncid_in, varids(i), varname, xtype, ndims, dimids, natts)
+      if (status /= nf90_noerr) call handle_err(status)
+      
+      !call copy_var_generic(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims), xtype)
+      select case(xtype)
+        case(NF90_DOUBLE)
+          call copy_var_double(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims))
+        case(NF90_FLOAT)
+          call copy_var_float(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims))
+        case(NF90_INT)
+          call copy_var_int(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims))
+        case default
+          print*, "Error: unsupported data type ", xtype
+          stop 10
+      end select
 
-! Start writing restart file
-    
+    end do
+
     ! snow_depth/swe variables from the vector restart are grid cell averages
     ! scaled by land_frac to get weasdl and snodl
     
@@ -1146,6 +1192,10 @@ contains
     status = nf90_inq_varid(ncid, "tgxy", varid)
     status = nf90_put_var(ncid, varid , tile%temperature_ground(:,:,itile)   , &
       start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
+
+    ! Close input file
+    status = nf90_close(ncid_in)
+    if (status /= nf90_noerr) call handle_err(status)
 
     ! close out file
     status = nf90_close(ncid)
