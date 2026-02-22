@@ -1165,9 +1165,9 @@ contains
       count = (/namelist%tile_size, namelist%tile_size, 4, 1/))
 
     status = nf90_inq_varid(ncid, "tgxy", varid)
-    status = nf90_put_var(ncid, varid , tile%temperature_ground(:,:,itile)   , &
-      start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
-
+    !status = nf90_put_var(ncid, varid , tile%temperature_ground(:,:,itile)   , &
+    !  start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
+    status = nf90_get_var(ncid, varid , tile%temperature_ground(:,:,itile))
 !    chksum = mpp_chksum( tile%temperature_ground(:,:,itile))   !, (/pe/) )
 !    print*, "mpp_checksum = ", chksum
 !    write(checksum_mppx,100) chksum
@@ -1180,11 +1180,11 @@ contains
     write(checksum_hex,200) digest
 200 format(Z32)
     deallocate(array_data_p)
-!    do i = 1, 16
-!        write(checksum_hex(2*i-1:2*i), '(Z2.2)') ichar(digest(i:i))
-!    end do
-!    print*, "md5 calculated checksum 1", checksum_hex
-!    print*, "md5 calculated checksum 2", checksum_hex2
+    do i = 1, 16
+        write(checksum_hex2(2*i-1:2*i), '(Z2.2)') ichar(digest(i:i))
+    end do
+    print*, "md5 calculated checksum 1", checksum_hex
+    print*, "md5 calculated checksum 2", checksum_hex2
 
     status = nf90_redef(ncid)
     if (status /= nf90_noerr) call handle_err(status)
