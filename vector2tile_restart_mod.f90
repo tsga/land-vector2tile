@@ -2,7 +2,7 @@ module vector2tile_restart_mod
 
   use namelist_mod
   use netcdf
-
+  use mpi
   use iso_c_binding
   implicit none
   interface
@@ -960,6 +960,8 @@ contains
   subroutine WriteTileRestart_update_existing(namelist, date, tile)
   
   use netcdf
+  !use mpp_mod
+  !use fms_mod
 
   type(namelist_type) :: namelist
   type(tile_type)     :: tile
@@ -979,27 +981,15 @@ contains
 
   logical             :: file_exists
   
-  character(len=32) :: checksum_hex
+  character(len=32) :: checksum_hex,checksum_hex2 !, checksum_mppx
   character(len=16) :: digest
-  real(kind=4), pointer :: array_data(:)
-
-  print*, "start"
-  allocate(array_data(2))
-  print*, "alloc"
-  array_data=(/1., 2./)
-
-  print*, "copy"
-      ! Call MD5
-    call MD5(c_loc(array_data), int(size(array_data)*4, c_size_t), digest)
-  print*, "md5"
-
-      ! Convert bytes to hex string
-      do i = 1, 16
-        write(checksum_hex(2*i-1:2*i), '(Z2.2)') ichar(digest(i:i))
-      end do
-   print*,"checkex"
-      print*, "calculated checksum ", checksum_hex
-
+  !double precision  :: array_data(namelist%tile_size, namelist%tile_size)
+  double precision, pointer :: array_data_p(:)
+  !integer :: chksum
+ 
+  !print*, "starting"
+  !call mpp_init()
+  !print*, "start"
 
   do itile = 1, 6
 
@@ -1053,32 +1043,16 @@ contains
       ! call copy_attributes(ncid_in, ncid, varids(i), varid_out)
       do j = 1, natts
         status = nf90_inq_attname(ncid_in, varids(i), j, attname)
-        if (trim(attname) /= "checksum") then
+        !if (trim(attname) /= "checksum") then
           status = nf90_copy_att(ncid_in, varids(i), trim(attname), ncid, varid_out)
           if (status /= nf90_noerr) call handle_err(status)
-        endif
+        !endif
       end do
- 
-      !status = nf90_def_var_fletcher32(ncid, varid_out, fletcher32 = nf90_fletcher32)
-      !if (status /= nf90_noerr) call handle_err(status)
-
       !status = nf90_def_var_chunking(ncid, varid_out, NF90_CHUNKED, (/0, 0/))
       !if (status /= nf90_noerr) call handle_err(status)
-
-      status = nf90_put_att(ncid, varid_out, "checksum", digest) !:#checksum_hex)
-      if (status /= nf90_noerr) call handle_err(status)
-
-
-      ! Call MD5
-!      call MD5(c_loc(tile%swe(:,:,3)), int(size(tile%swe(:,:,3))*4, c_size_t), digest)
-!      
-!      ! Convert bytes to hex string
-!      do i = 1, 16
-!        write(field_checksum_hex(2*i-1:2*i), '(Z2.2)') ichar(digest(i:i))
-!      end do
-
+      !status = nf90_def_var_fletcher32(ncid, varid_out, fletcher32 = nf90_fletcher32)
+      !if (status /= nf90_noerr) call handle_err(status)
     end do 
-
 
     ! Copy global attributes
     do i = 1, ngatts
@@ -1193,6 +1167,37 @@ contains
     status = nf90_put_var(ncid, varid , tile%temperature_ground(:,:,itile)   , &
       start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
 
+!    chksum = mpp_chksum( tile%temperature_ground(:,:,itile))   !, (/pe/) )
+!    print*, "mpp_checksum = ", chksum
+!    write(checksum_mppx,100) chksum
+!100 format(Z16)
+!    print*, "checksum_mppx ", checksum_mppx
+
+    allocate(array_data_p(namelist%tile_size * namelist%tile_size))
+    array_data_p = reshape(tile%temperature_ground(:,:,itile), (/namelist%tile_size * namelist%tile_size/))
+    call MD5(c_loc(array_data_p), int(size(array_data_p)*4, c_size_t), digest)
+    write(checksum_hex,200) digest
+200 format(Z32)
+    deallocate(array_data_p)
+!    do i = 1, 16
+!        write(checksum_hex(2*i-1:2*i), '(Z2.2)') ichar(digest(i:i))
+!    end do
+!    print*, "md5 calculated checksum 1", checksum_hex
+!    print*, "md5 calculated checksum 2", checksum_hex2
+
+    status = nf90_redef(ncid)
+    if (status /= nf90_noerr) call handle_err(status)
+
+    status = nf90_inquire_attribute(ncid, varid, 'checksum')
+    if (status == nf90_noerr) then ! call handle_err(status)
+        status = nf90_del_att(ncid, varid, 'checksum')
+        if (status /= nf90_noerr) call handle_err(status)
+        status = nf90_put_att(ncid, varid, "checksum", checksum_hex)
+        if (status /= nf90_noerr) call handle_err(status)
+    endif
+    status = nf90_enddef(ncid)
+    if (status /= nf90_noerr) call handle_err(status)
+    
     ! Close input file
     status = nf90_close(ncid_in)
     if (status /= nf90_noerr) call handle_err(status)
@@ -1205,6 +1210,56 @@ contains
   
   end subroutine WriteTileRestart_update_existing
 
+!> Remove the checksum attribute from a netcdf record.
+!!
+!! @param[in] ncid netcdf file id
+!! @param[in] id_var netcdf variable id.
+!!
+!! @author George Gayno NCEP/EMC
+! subroutine remove_checksum(ncid, id_var)
+!
+! implicit none
+!
+! integer, intent(in)       :: ncid, id_var
+!
+! integer                   :: error
+!
+! error=nf90_inquire_attribute(ncid, id_var, 'checksum')
+!
+! if (error == 0) then ! attribute was found
+!
+!   error = nf90_redef(ncid)
+!   call netcdf_err(error, 'entering define mode' )
+!
+!   error=nf90_del_att(ncid, id_var, 'checksum')
+!   call netcdf_err(error, 'deleting checksum' )
+!
+!   error= nf90_enddef(ncid)
+!   call netcdf_err(error, 'ending define mode' )
+!
+! endif
+!
+! end subroutine remove_checksum
+
+!  subroutine calculate_checksum(array_data, checksum_hex)
+!    use netcdf
+!    implicit none
+!    character(len=32) :: checksum_hex
+!    character(len=16) :: digest
+!    double precision, pointer :: array_data(:)
+!
+!    print*, "copy"
+!     ! Call MD5
+!    call MD5(c_loc(array_data), int(size(array_data)*4, c_size_t), digest)
+!    print*, "md5"
+!    ! Convert bytes to hex string
+!    do i = 1, 16
+!        write(checksum_hex(2*i-1:2*i), '(Z2.2)') ichar(digest(i:i))
+!    end do
+!    print*,"checkex"
+!    print*, "calculated checksum ", checksum_hex
+
+!  end subroutine calculate_checksum
 
 !  subroutine copy_var_generic(ncid_in, ncid_out, varid_in, varid_out, ndims, dimids, xtype)
 !    use netcdf
