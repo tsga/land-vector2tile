@@ -1210,6 +1210,171 @@ contains
   
   end subroutine WriteTileRestart_update_existing
 
+  subroutine update_coldstarts_with_spinup(namelist, date, tile)
+  
+  use netcdf
+  !use mpp_mod
+  !use fms_mod
+
+  type(namelist_type) :: namelist
+  type(tile_type)     :: tile
+  character*19        :: date
+  character*256       :: tile_filename, tile_filename_in, tile_filename_out
+  integer             :: itile
+  integer             :: ncid_in, ncid, varid, dimid, status, i, nvars, ndims, ngatts
+  integer             :: varid_in, varid_out
+  integer             :: dimids(NF90_MAX_DIMS), varids(NF90_MAX_DIMS)
+  character(len=NF90_MAX_NAME) :: varname, dimname
+  integer                      :: xtype, natts, dimlen, attlen, j
+  character(len=NF90_MAX_NAME)  :: attname
+  character(len=:), allocatable :: attval
+  
+  integer             :: dim_id_xdim, dim_id_ydim, dim_id_soil, dim_id_snow, dim_id_snso, dim_id_time
+  double precision    :: swe_snd_land(namelist%tile_size, namelist%tile_size)   ! swe/snd over land
+
+  logical             :: file_exists
+
+  do itile = 1, 6
+
+    !write(tile_filename,'(a4,a2,a2,a1,a2,a18,i1,a3)')  & 
+    !   date(1:4), date(6:7), date(9:10),".",date(12:13), "0000.sfc_data.tile",itile,".nc"
+    write(tile_filename,'(a15,i1,a3)')  "sfc_data.tile",itile,".nc"
+    tile_filename_in = trim(namelist%tile_restart_path)//trim(tile_filename)
+    tile_filename_out = trim(namelist%output_path)//trim(tile_filename)
+    
+    inquire(file=tile_filename_in, exist=file_exists)
+    if(.not.file_exists) then 
+      print*, trim(tile_filename_in), " does not exist"
+      print*, "Check namelist setting (update existing file) and paths and file name "
+      stop 10
+    end if
+    status = nf90_open(tile_filename_in, NF90_WRITE, ncid_in)
+    if (status /= nf90_noerr) call handle_err(status)
+
+    ! Create output file
+    status = nf90_create(tile_filename_out, IOR(NF90_NETCDF4, NF90_CLOBBER), ncid)
+    if (status /= nf90_noerr) call handle_err(status)
+  
+    ! Get file info
+    status = nf90_inquire(ncid_in, nDimensions=ndims, nVariables=nvars, nAttributes=ngatts)
+    if (status /= nf90_noerr) call handle_err(status)
+
+    ! Copy dimensions
+    !status = nf90_inq_dimids(ncid_in, nvars, dimids(1:ndims))
+    !if (status /= nf90_noerr) call handle_err(status)
+    do i = 1, ndims
+      status = nf90_inquire_dimension(ncid_in, i, dimname, dimlen)
+      if (status /= nf90_noerr) call handle_err(status)
+      if (dimlen == NF90_UNLIMITED) then
+        status = nf90_def_dim(ncid, trim(dimname), NF90_UNLIMITED, i)
+      else
+        status = nf90_def_dim(ncid, trim(dimname), dimlen, i)
+      end if
+      if (status /= nf90_noerr) call handle_err(status)
+    end do
+    
+    ! Define variables
+    status = nf90_inq_varids(ncid_in, nvars, varids)
+    if (status /= nf90_noerr) call handle_err(status)
+    do i = 1, nvars
+      status = nf90_inquire_variable(ncid_in, varids(i), varname, xtype, ndims, dimids, natts)
+      if (status /= nf90_noerr) call handle_err(status)
+      status = nf90_def_var(ncid, trim(varname), xtype, dimids(1:ndims), varid_out)
+      if (status /= nf90_noerr) call handle_err(status)
+      
+      ! call copy_attributes(ncid_in, ncid, varids(i), varid_out)
+      do j = 1, natts
+        status = nf90_inq_attname(ncid_in, varids(i), j, attname)
+        !if (trim(attname) /= "checksum") then
+          status = nf90_copy_att(ncid_in, varids(i), trim(attname), ncid, varid_out)
+          if (status /= nf90_noerr) call handle_err(status)
+        !endif
+      end do
+      !status = nf90_def_var_chunking(ncid, varid_out, NF90_CHUNKED, (/0, 0/))
+      !if (status /= nf90_noerr) call handle_err(status)
+      !status = nf90_def_var_fletcher32(ncid, varid_out, fletcher32 = nf90_fletcher32)
+      !if (status /= nf90_noerr) call handle_err(status)
+    end do 
+
+    ! Copy global attributes
+    do i = 1, ngatts
+      call copy_global_attribute(ncid_in, ncid, i)
+    end do
+
+    ! End definition mode
+    status = nf90_enddef(ncid)
+    if (status /= nf90_noerr) call handle_err(status)
+
+    ! Copy variable data
+    !call copy_all_variables(ncid_in, ncid, nvars)
+    do i = 1, nvars
+      status = nf90_inquire_variable(ncid_in, varids(i), varname, xtype, ndims, dimids, natts)
+      if (status /= nf90_noerr) call handle_err(status)
+      
+      !call copy_var_generic(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims), xtype)
+      select case(xtype)
+        case(NF90_DOUBLE)
+          call copy_var_double(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims))
+        case(NF90_FLOAT)
+          call copy_var_float(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims))
+        case(NF90_INT)
+          call copy_var_int(ncid_in, ncid, varids(i), varid_out, ndims, dimids(1:ndims))
+        case default
+          print*, "Error: unsupported data type ", xtype
+          stop 10
+      end select
+
+    end do
+
+    ! snow_depth/swe variables from the vector restart are grid cell averages
+    ! scaled by land_frac to get weasdl and snodl
+    
+    !status = nf90_inq_varid(ncid, "sheleg", varid)
+    !status = nf90_put_var(ncid, varid , tile%swe(:,:,itile)   , &
+    !  start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
+    
+    swe_snd_land = 0.   !tile%swe(:,:,itile)
+    where(tile%land_frac(:,:,itile) > 0.) swe_snd_land = tile%swe(:,:,itile)/tile%land_frac(:,:,itile)
+    status = nf90_inq_varid(ncid, "weasdl", varid)
+    status = nf90_put_var(ncid, varid , swe_snd_land(:,:)   , &                 !weasdl = swe_grid/land_frac
+      start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
+    
+    !status = nf90_inq_varid(ncid, "snwdph", varid)
+    !status = nf90_put_var(ncid, varid , tile%snow_depth(:,:,itile)   , &
+    ! start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
+  
+    swe_snd_land = 0.  
+    where(tile%land_frac(:,:,itile) > 0.) swe_snd_land = tile%snow_depth(:,:,itile)/tile%land_frac(:,:,itile)
+    status = nf90_inq_varid(ncid, "snodl", varid)
+    status = nf90_put_var(ncid, varid , swe_snd_land(:,:)   , &
+      start = (/1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 1/))
+
+    status = nf90_inq_varid(ncid, "stc", varid)
+    status = nf90_put_var(ncid, varid , tile%temperature_soil(:,:,:,itile)   , &
+      start = (/1,1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 4, 1/))
+
+    status = nf90_inq_varid(ncid, "smc", varid)
+    status = nf90_put_var(ncid, varid , tile%soil_moisture_total(:,:,:,itile)   , &
+      start = (/1,1,1,1/), count = (/namelist%tile_size, namelist%tile_size, 4, 1/)) 
+
+! include for JEDI QC of SMAP obs
+    status = nf90_inq_varid(ncid, "slc", varid)
+    status = nf90_put_var(ncid, varid , tile%soil_moisture_liquid(:,:,:,itile)   , &
+      start = (/1                , 1                , 1, 1/), &
+      count = (/namelist%tile_size, namelist%tile_size, 4, 1/))
+   
+    ! Close input file
+    status = nf90_close(ncid_in)
+    if (status /= nf90_noerr) call handle_err(status)
+
+    ! close out file
+    status = nf90_close(ncid)
+    if (status /= nf90_noerr) call handle_err(status)
+   
+  end do
+  
+  end subroutine update_coldstarts_with_spinups
+
 !> Remove the checksum attribute from a netcdf record.
 !!
 !! @param[in] ncid netcdf file id
